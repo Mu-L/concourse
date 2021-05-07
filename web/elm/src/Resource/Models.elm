@@ -1,6 +1,10 @@
 module Resource.Models exposing
     ( CheckStatus(..)
+    , Entity
     , Model
+    , NodeId
+    , NodeMetadata
+    , NodeType(..)
     , PageError(..)
     , PinnedVersion
     , Version
@@ -11,6 +15,8 @@ module Resource.Models exposing
 import Build.Output.Models exposing (OutputModel)
 import Concourse
 import Concourse.Pagination exposing (Page, Paginated)
+import Force
+import Graph exposing (Graph, NodeId)
 import Login.Login as Login
 import Pinned exposing (CommentState, ResourcePinState)
 import Routes
@@ -72,4 +78,25 @@ type alias Version =
     , expanded : Bool
     , inputTo : List Concourse.Build
     , outputOf : List Concourse.Build
+    , causality : Maybe (Graph Entity ())
     }
+
+
+type alias NodeId =
+    Int
+
+
+type alias NodeMetadata =
+    { nodeType : NodeType
+    , name : String
+    , version : String
+    }
+
+
+type NodeType
+    = BuildNode
+    | ResourceVersionNode
+
+
+type alias Entity =
+    Force.Entity NodeId { value : NodeMetadata }
