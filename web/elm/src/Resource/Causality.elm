@@ -9,14 +9,16 @@ module Resource.Causality exposing
 
 import Color
 import Concourse
+import Dict
 import Force
 import Graph exposing (Edge, Graph, Node, NodeContext, NodeId)
 import Html
-import TypedSvg exposing (circle, g, line, rect, svg, text_)
-import TypedSvg.Attributes as Attrs exposing (fill, fontSize, pointerEvents, stroke, viewBox)
-import TypedSvg.Attributes.InPx exposing (cx, cy, dx, dy, height, r, strokeWidth, width, x, x1, x2, y, y1, y2)
-import TypedSvg.Core exposing (Svg, text)
-import TypedSvg.Types as Types exposing (Paint(..))
+import TypedSvg exposing (circle, defs, g, line, marker, polygon, rect, svg, text_)
+import TypedSvg.Attributes as Attrs exposing (fill, fontSize, id, markerEnd, orient, pointerEvents, points, refX, refY, stroke, viewBox)
+import TypedSvg.Attributes.InPx exposing (cx, cy, dx, dy, height, markerHeight, markerWidth, r, strokeWidth, width, x, x1, x2, y, y1, y2)
+import TypedSvg.Core exposing (Svg, foreignObject, text)
+import TypedSvg.Types as Types exposing (Length(..), Paint(..))
+import Views.DictView as DictView
 
 
 type alias NodeId =
@@ -26,7 +28,7 @@ type alias NodeId =
 type alias NodeMetadata =
     { nodeType : NodeType
     , name : String
-    , version : String
+    , version : Concourse.Version
     }
 
 
@@ -42,11 +44,35 @@ type alias Entity =
 viewCausality : Graph Entity () -> Html.Html msg
 viewCausality graph =
     let
-        ( w, h ) =
+        ( ( x, y ), ( w, h ) ) =
             graphDimensions <| Graph.nodes graph
     in
-    svg [ viewBox 0 0 w h ]
-        [ Graph.edges graph
+    svg
+        [ viewBox x y w h
+        ]
+        [ defs
+            []
+            [ marker
+                [ id "arrow"
+                , markerWidth 10
+                , markerHeight 7
+                , refX "40"
+                , refY "3.5"
+                , orient "auto"
+                ]
+                [ polygon
+                    [ points
+                        [ ( 0, 0 )
+                        , ( 10, 3.5 )
+                        , ( 0, 7 )
+                        ]
+                    , fill <|
+                        Paint Color.red
+                    ]
+                    []
+                ]
+            ]
+        , Graph.edges graph
             |> List.map (linkElement graph)
             |> g [ Attrs.class [ "causality-links" ] ]
         , Graph.nodes graph
@@ -65,7 +91,7 @@ linkElement graph edge =
         emptyMetadata =
             { nodeType = ResourceVersionNode
             , name = ""
-            , version = ""
+            , version = Dict.empty
             }
 
         source =
@@ -81,6 +107,7 @@ linkElement graph edge =
         , y1 source.y
         , x2 target.x
         , y2 target.y
+        , markerEnd "url(#arrow)"
         ]
         []
 
@@ -88,7 +115,7 @@ linkElement graph edge =
 nodeElement : { a | id : NodeId, label : { b | x : Float, y : Float, value : NodeMetadata } } -> Svg msg
 nodeElement node =
     g [ Attrs.class [ "causality-node" ] ]
-        [ rect
+        [ circle
             [ case node.label.value.nodeType of
                 BuildNode ->
                     fill <| Paint Color.lightGreen
@@ -97,14 +124,14 @@ nodeElement node =
                     fill <| Paint Color.lightBlue
             , stroke <| Paint <| Color.rgba 0 0 0 0
             , strokeWidth 7
+            , r 30
+            , cx node.label.x
+            , cy node.label.y
 
-            -- , r 30
-            -- , cx node.label.x
-            -- , cy node.label.y
-            , x <| node.label.x - 30
-            , y <| node.label.y - 12
-            , width 60
-            , height 25
+            -- , x <| node.label.x - 30
+            -- , y <| node.label.y - 12
+            -- , width 60
+            -- , height 25
             ]
             [ TypedSvg.title [] [ TypedSvg.Core.text node.label.value.name ] ]
         , -- apparently svg doesn't have a nice way of rendering newline in text
@@ -127,20 +154,35 @@ nodeElement node =
             , fill (Paint Color.black)
             , pointerEvents "none"
             ]
-            [ text node.label.value.version ]
+            [ text <| Dict.foldl (\k v acc -> k ++ ":" ++ v ++ "," ++ acc) "" node.label.value.version ]
         ]
 
 
-graphDimensions : List (Node Entity) -> ( Float, Float )
+graphDimensions : List (Node Entity) -> ( ( Float, Float ), ( Float, Float ) )
 graphDimensions nodes =
     let
-        x =
-            toFloat <| List.length nodes
+        n =
+            List.map .label nodes
+
+        minX =
+            List.foldl (\{ x } acc -> min x acc) 999999 n
+
+        minY =
+            List.foldl (\{ y } acc -> min y acc) 999999 n
+
+        maxX =
+            List.foldl (\{ x } acc -> max x acc) 0 n
+
+        maxY =
+            List.foldl (\{ y } acc -> max y acc) 0 n
 
         width =
-            round <| (x * 10.0) + 300
+            maxX - minX
+
+        height =
+            maxY - minY
     in
-    ( toFloat width, toFloat <| round <| toFloat width * 2 / 3 )
+    ( ( minX - 60, minY - 60 ), ( width + 120, height + 120 ) )
 
 
 
@@ -161,7 +203,7 @@ constructResourceVersion : NodeId -> NodeId -> Concourse.CausalityResourceVersio
 constructResourceVersion parentId maxId rv =
     let
         nodeId =
-            maxId + 1
+            rv.versionId
 
         updater : Concourse.CausalityBuild -> GraphConstructor -> GraphConstructor
         updater child acc =
@@ -191,14 +233,13 @@ constructResourceVersion parentId maxId rv =
 constructBuild : NodeId -> NodeId -> Concourse.CausalityBuild -> GraphConstructor
 constructBuild parentId maxId (Concourse.CausalityBuildVariant b) =
     let
-        nodeId =
-            maxId + 1
-
+        -- nodeId =
+        --     maxId + 1
         updater : Concourse.CausalityResourceVersion -> GraphConstructor -> GraphConstructor
         updater child acc =
             let
                 result =
-                    constructResourceVersion nodeId acc.maxId child
+                    constructResourceVersion parentId acc.maxId child
             in
             { nodes = acc.nodes ++ result.nodes
             , edges = acc.edges ++ result.edges
@@ -207,9 +248,9 @@ constructBuild parentId maxId (Concourse.CausalityBuildVariant b) =
     in
     List.foldl
         updater
-        { nodes = [ Node nodeId { nodeType = BuildNode, name = b.jobName, version = "#" ++ b.name } ]
-        , edges = [ Edge parentId nodeId () ]
-        , maxId = nodeId
+        { nodes = []
+        , edges = []
+        , maxId = maxId
         }
         b.outputs
 
@@ -237,16 +278,23 @@ buildGraph rv =
         initialGraph =
             Graph.mapContexts initializeNode graphData
 
-        ( w, h ) =
-            graphDimensions <| Graph.nodes initialGraph
-
         link { from, to } =
             ( from, to )
+
+        fn { id } =
+            if id == rv.versionId then
+                { node = id, strength = 1, target = 0 }
+
+            else
+                { node = id, strength = 0.8, target = 500 }
 
         forces =
             [ Force.links <| List.map link <| Graph.edges initialGraph
             , Force.manyBody <| List.map .id <| Graph.nodes initialGraph
-            , Force.center (w / 2) (h / 2)
+            , Force.collision 40 <| List.map .id <| Graph.nodes initialGraph
+
+            -- , Force.towardsX <| List.map fn <| Graph.nodes initialGraph
+            , Force.towardsY <| List.map fn <| Graph.nodes initialGraph
             ]
 
         simulation : List Entity
